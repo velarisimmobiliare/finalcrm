@@ -1,0 +1,1345 @@
+<!DOCTYPE html>
+<html lang="ro">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0" />
+<title>Imobiliare CRM</title>
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script>
+window.tailwind = {
+  config: {
+    theme: {
+      extend: {
+        colors: {
+          navy: '#0a1628',
+          gold: '#c9a84c',
+          'gold-light': '#e6c96f',
+        }
+      }
+    }
+  }
+};
+</script>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  * { box-sizing: border-box; }
+  html {
+    margin: 0;
+    overflow-x: hidden;
+    /* Smooth momentum scrolling on iOS */
+    -webkit-overflow-scrolling: touch;
+    scroll-behavior: smooth;
+  }
+  body {
+    margin: 0;
+    overflow-x: hidden;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    /* Prevent text size adjustment on orientation change */
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+    /* Safe area insets for notch/home bar */
+    padding-left: env(safe-area-inset-left);
+    padding-right: env(safe-area-inset-right);
+  }
+  /* Smooth scrolling on all scrollable containers */
+  * {
+    -webkit-overflow-scrolling: touch;
+  }
+  ::-webkit-scrollbar { width: 4px; height: 4px; }
+  ::-webkit-scrollbar-track { background: #f1f5f9; }
+  ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+  .gold-gradient { background: linear-gradient(135deg, #c9a84c, #e6c96f); }
+  @keyframes pulse-dot { 0%,100%{opacity:1}50%{opacity:.4} }
+  .animate-pulse-dot { animation: pulse-dot 1.5s ease-in-out infinite; }
+
+  /* Prevent content from touching screen edges on mobile */
+  @media (max-width: 1023px) {
+    /* Main content padding accounts for top bar */
+    main {
+      padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 24px) !important;
+    }
+  }
+
+  /* Touch targets — minimum 44px for all interactive elements on mobile */
+  @media (max-width: 1023px) {
+    button, a, select, input[type="checkbox"], input[type="radio"] {
+      min-height: 44px;
+    }
+    /* But don't stretch badge-style spans */
+    span.inline-flex {
+      min-height: unset;
+    }
+  }
+
+  /* Smooth modal scroll */
+  .modal-scroll {
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior: contain;
+  }
+
+  /* Prevent double-tap zoom on buttons */
+  button, a {
+    touch-action: manipulation;
+  }
+
+  /* Better tap highlight */
+  * {
+    -webkit-tap-highlight-color: rgba(0,0,0,0.05);
+  }
+
+  /* Fix select on iOS - prevent zoom */
+  @media (max-width: 1023px) {
+    input, select, textarea {
+      font-size: 16px !important;
+    }
+  }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script>
+const { useState, useEffect, useMemo, useCallback } = React;
+
+// ─── SUPABASE CONFIG ──────────────────────────────────────────────────────────
+const SUPABASE_URL = "https://bpukoacrxqlftxzfhayb.supabase.co";
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJwdWtvYWNyeHFsZnR4emZoYXliIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODIxMTM1MTQsImV4cCI6MjA5NzY4OTUxNH0.PL9P-WlpsGZw1d08eWm_Qu2wFUFkQyHmAcuydrzK7gs";
+
+const SB_HEADERS = {
+  "Content-Type": "application/json",
+  "apikey": SUPABASE_ANON_KEY,
+  "Authorization": `Bearer ${SUPABASE_ANON_KEY}`,
+  "Prefer": "return=representation"
+};
+
+// ─── SUPABASE DATA LAYER (plain fetch — no library needed) ────────────────────
+const db = {
+  async getAll(table) {
+    try {
+      const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}?order=id`, { headers: SB_HEADERS });
+      if (!res.ok) { console.error(`Eroare citire ${table}:`, await res.text()); return null; }
+      return await res.json();
+    } catch(e) { console.error(e); return null; }
+  },
+  async upsert(table, row) {
+    try {
+      const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}`, {
+        method: "POST",
+        headers: { ...SB_HEADERS, "Prefer": "resolution=merge-duplicates,return=representation" },
+        body: JSON.stringify(row)
+      });
+      if (!res.ok) {
+        const err = await res.text();
+        console.error(`Eroare salvare ${table}:`, err);
+        return { error: err };
+      }
+      const data = await res.json();
+      return Array.isArray(data) ? data[0] : data;
+    } catch(e) { console.error(e); return null; }
+  },
+  async remove(table, id) {
+    try {
+      const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}?id=eq.${id}`, {
+        method: "DELETE",
+        headers: SB_HEADERS
+      });
+      return res.ok;
+    } catch(e) { console.error(e); return false; }
+  }
+};
+
+// Serialize array fields and convert empty strings to null for numeric fields
+const toDb = (row) => {
+  const r = { ...row };
+  if (Array.isArray(r.activitati)) r.activitati = JSON.stringify(r.activitati);
+  if (Array.isArray(r.utilitati)) r.utilitati = JSON.stringify(r.utilitati);
+  if (Array.isArray(r.parcele)) r.parcele = JSON.stringify(r.parcele);
+  // Convert empty strings to null for all fields (Supabase rejects "" for numeric columns)
+  Object.keys(r).forEach(k => {
+    if (r[k] === "" || r[k] === undefined) r[k] = null;
+  });
+  return r;
+};
+const fromDb = (row) => {
+  const r = { ...row };
+  if (typeof r.activitati === "string") try { r.activitati = JSON.parse(r.activitati); } catch { r.activitati = []; }
+  if (typeof r.utilitati === "string") try { r.utilitati = JSON.parse(r.utilitati); } catch { r.utilitati = []; }
+  if (typeof r.parcele === "string") try { r.parcele = JSON.parse(r.parcele); } catch { r.parcele = []; }
+  return r;
+};
+
+// ─── CONSTANTE ────────────────────────────────────────────────────────────────
+const PARCELE_OPTIONS = Array.from({ length: 54 }, (_, i) => `P${i + 1}`);
+const STATUS_LEAD = ["Lead Nou", "Contactat", "Interesat", "Vizionare Programată", "Negociere", "Rezervat", "Contract Semnat", "Pierdut"];
+const SURSE = ["Facebook", "Instagram", "Recomandare", "OLX", "Site", "Telefon direct", "Altă sursă"];
+const MODALITATI_PLATA = ["Cash", "Credit", "Rate dezvoltator", "Neclar"];
+const TERMENE = ["Urgent", "1 lună", "3 luni", "6 luni", "Doar se informează"];
+const SCOPURI = ["Casă proprie", "Investiție", "Duplex", "Revânzare", "Altul"];
+const PRIORITATI = ["Mică", "Medie", "Mare"];
+const TIP_ACTIVITATE = ["Apel telefonic", "Mesaj WhatsApp", "Email", "Vizionare", "Întâlnire", "Negociere", "Trimitere documente", "Follow-up"];
+const STATUS_PARCELA = ["Liberă", "Interes activ", "Rezervată", "Vândută"];
+const STATUS_VIZIONARE = ["Programată", "Realizată", "Anulată", "Reprogramată"];
+const STATUS_CONTRACT = ["Rezervare verbală", "Avans primit", "Antecontract", "Contract final", "Pierdut"];
+const UTILITATI = ["Apă", "Curent", "Canalizare", "Gaz"];
+const TIP_REMINDER = ["Apel", "WhatsApp", "Email", "Vizionare", "Negociere", "Follow-up", "Documente", "Altul"];
+
+// ─── DATE DEMO ────────────────────────────────────────────────────────────────
+const todayStr = () => new Date().toISOString().split("T")[0];
+const tomorrowStr = () => new Date(Date.now() + 86400000).toISOString().split("T")[0];
+
+const DEMO_LEADS = [
+  { id: 1, nume: "Andrei Popescu", telefon: "0721 234 567", email: "andrei@email.com", oras: "București", sursa: "Facebook", dataIntrare: "2025-06-01", suprafataDoritaMin: 500, suprafataDoritaMax: 700, parcelaInteresata: "P3", bugetTotal: 45000, avansDisponibil: 10000, modalitataPlata: "Credit", pretMpComunicat: 65, pretTotalComunicat: 42000, termen: "3 luni", scop: "Casă proprie", status: "Interesat", dataUrmatorApel: todayStr(), oraUrmatorApel: "10:00", motivFollowUp: "Asteaptă răspuns de la bancă", prioritate: "Mare", ultimulContact: "2025-06-07", urmatoPas: "Trimite ofertă scrisă", observatii: "Foarte interesat, are aprobare bancă în lucru", obiectii: "Preț prea mare", ceAmPromis: "Ofertă scrisă cu plan de plată", documente: "Extras CF, plan parcela", activitati: [
+    { id: 1, data: "2025-06-01", ora: "09:30", tip: "Apel telefonic", descriere: "Prim contact, interesat de parcele între 500-700 mp", rezultat: "Interesat, cere ofertă", urmatPas: "Trimite ofertă", dataFollowUp: "2025-06-05" },
+    { id: 2, data: "2025-06-05", ora: "14:00", tip: "Email", descriere: "Am trimis oferta pentru P3", rezultat: "Confirmat recepție", urmatPas: "Apel în 3 zile", dataFollowUp: todayStr() }
+  ]},
+  { id: 2, nume: "Maria Ionescu", telefon: "0744 567 890", email: "maria@gmail.com", oras: "Ploiești", sursa: "Recomandare", dataIntrare: "2025-06-03", suprafataDoritaMin: 400, suprafataDoritaMax: 500, parcelaInteresata: "P7", bugetTotal: 30000, avansDisponibil: 15000, modalitataPlata: "Cash", pretMpComunicat: 70, pretTotalComunicat: 32000, termen: "1 lună", scop: "Investiție", status: "Vizionare Programată", dataUrmatorApel: tomorrowStr(), oraUrmatorApel: "11:00", motivFollowUp: "Confirmare vizionare", prioritate: "Mare", ultimulContact: "2025-06-08", urmatoPas: "Vizionare sâmbătă", observatii: "Plateste cash, decizie rapidă", obiectii: "Vrea să vadă locația înainte", ceAmPromis: "Vizionare weekend", documente: "", activitati: [
+    { id: 1, data: "2025-06-03", ora: "16:00", tip: "Apel telefonic", descriere: "Recomandare de la Dl. Gheorghe, dorește parcelă pentru investiție", rezultat: "Programată vizionare", urmatPas: "Vizionare", dataFollowUp: "2025-06-14" }
+  ]},
+  { id: 3, nume: "Ion Dumitrescu", telefon: "0766 111 222", email: "", oras: "Brașov", sursa: "OLX", dataIntrare: "2025-05-28", suprafataDoritaMin: 700, suprafataDoritaMax: 1000, parcelaInteresata: "P12", bugetTotal: 60000, avansDisponibil: 20000, modalitataPlata: "Rate dezvoltator", pretMpComunicat: 60, pretTotalComunicat: 55000, termen: "6 luni", scop: "Casă proprie", status: "Negociere", dataUrmatorApel: todayStr(), oraUrmatorApel: "15:30", motivFollowUp: "Negociere preț final", prioritate: "Mare", ultimulContact: "2025-06-06", urmatoPas: "Semnare rezervare", observatii: "Negociază agresiv, dar serios", obiectii: "Vrea rate pe 3 ani", ceAmPromis: "Analizăm planul de rate", documente: "CI, adeverință venit", activitati: [
+    { id: 1, data: "2025-05-28", ora: "10:00", tip: "Apel telefonic", descriere: "Contact OLX", rezultat: "Interesat parcelă mare", urmatPas: "Vizionare", dataFollowUp: "2025-06-01" },
+    { id: 2, data: "2025-06-01", ora: "11:00", tip: "Vizionare", descriere: "Vizionare P12, mulțumit de locație", rezultat: "Vrea să negocieze prețul", urmatPas: "Negociere telefon", dataFollowUp: "2025-06-06" }
+  ]},
+  { id: 4, nume: "Elena Radu", telefon: "0755 333 444", email: "elena.radu@yahoo.com", oras: "Cluj", sursa: "Instagram", dataIntrare: "2025-06-07", suprafataDoritaMin: 300, suprafataDoritaMax: 400, parcelaInteresata: "P5", bugetTotal: 25000, avansDisponibil: 5000, modalitataPlata: "Credit", pretMpComunicat: 0, pretTotalComunicat: 0, termen: "Doar se informează", scop: "Casă proprie", status: "Lead Nou", dataUrmatorApel: todayStr(), oraUrmatorApel: "14:00", motivFollowUp: "Prim contact", prioritate: "Medie", ultimulContact: "", urmatoPas: "Apel inițial", observatii: "Mesaj Instagram, cere informații generale", obiectii: "", ceAmPromis: "", documente: "", activitati: [] }
+];
+
+const DEMO_PARCELE = [
+  { id: 1, cod: "P1", suprafata: 450, pretMp: 65, pretTotal: 29250, status: "Liberă", clientAsociat: "", avansPrivit: 0, termenPlata: "", observatii: "Colț, două fronturi stradale", linkMaps: "", utilitati: ["Apă", "Curent"], frontStradal: 18, deschidere: 18, adancime: 25 },
+  { id: 2, cod: "P3", suprafata: 650, pretMp: 65, pretTotal: 42250, status: "Interes activ", clientAsociat: "Andrei Popescu", avansPrivit: 0, termenPlata: "", observatii: "Vedere bună, teren plat", linkMaps: "", utilitati: ["Apă", "Curent", "Canalizare"], frontStradal: 22, deschidere: 22, adancime: 29 },
+  { id: 3, cod: "P5", suprafata: 380, pretMp: 65, pretTotal: 24700, status: "Liberă", clientAsociat: "", avansPrivit: 0, termenPlata: "", observatii: "", linkMaps: "", utilitati: ["Apă", "Curent"], frontStradal: 15, deschidere: 15, adancime: 25 },
+  { id: 4, cod: "P7", suprafata: 490, pretMp: 70, pretTotal: 34300, status: "Interes activ", clientAsociat: "Maria Ionescu", avansPrivit: 0, termenPlata: "", observatii: "Lângă intrarea principală", linkMaps: "", utilitati: ["Apă", "Curent", "Canalizare", "Gaz"], frontStradal: 19, deschidere: 19, adancime: 25 },
+  { id: 5, cod: "P12", suprafata: 920, pretMp: 60, pretTotal: 55200, status: "Rezervată", clientAsociat: "Ion Dumitrescu", avansPrivit: 5000, termenPlata: "2025-07-15", observatii: "Cea mai mare parcelă, negociere în curs", linkMaps: "", utilitati: ["Apă", "Curent"], frontStradal: 28, deschidere: 28, adancime: 32 },
+  { id: 6, cod: "P2", suprafata: 420, pretMp: 65, pretTotal: 27300, status: "Vândută", clientAsociat: "Gheorghe Stancu", avansPrivit: 27300, termenPlata: "", observatii: "Contract semnat 15 mai", linkMaps: "", utilitati: ["Apă", "Curent", "Canalizare"], frontStradal: 17, deschidere: 17, adancime: 24 }
+];
+
+const DEMO_VIZIONARI = [
+  { id: 1, clientId: 2, clientNume: "Maria Ionescu", telefon: "0744 567 890", parcele: ["P7"], data: "2025-06-14", ora: "11:00", locatie: "La intrarea în ansamblu, poarta principală", status: "Programată", observatii: "", urmatPas: "" },
+  { id: 2, clientId: 3, clientNume: "Ion Dumitrescu", telefon: "0766 111 222", parcele: ["P12"], data: "2025-06-01", ora: "11:00", locatie: "La fața locului", status: "Realizată", observatii: "Mulțumit de teren, a cerut plan de rate", urmatPas: "Negociere preț" }
+];
+
+const DEMO_CONTRACTE = [
+  { id: 1, clientId: 3, clientNume: "Ion Dumitrescu", parcela: "P12", pretNegociat: 53000, avansStabilit: 10000, avansPlata: 5000, dataRezervare: "2025-06-06", dataLimitaContract: "2025-07-06", status: "Avans primit", docNecesare: "CI, adeverință venit, extras CF", observatiiJuridice: "Necesită verificare ipotecă" },
+  { id: 2, clientId: 99, clientNume: "Gheorghe Stancu", parcela: "P2", pretNegociat: 27300, avansStabilit: 27300, avansPlata: 27300, dataRezervare: "2025-05-01", dataLimitaContract: "2025-05-20", status: "Contract final", docNecesare: "", observatiiJuridice: "Finalizat la notar" }
+];
+
+const DEMO_REMINDERE = [
+  { id: 1, clientId: 1, clientNume: "Andrei Popescu", data: todayStr(), ora: "10:00", tip: "Apel", descriere: "Asteaptă răspuns de la bancă - trebuie să confirm oferta scrisă", prioritate: "Mare", facut: false },
+  { id: 2, clientId: 3, clientNume: "Ion Dumitrescu", data: todayStr(), ora: "15:30", tip: "Negociere", descriere: "Discuție finală preț și plan de rate pe 3 ani", prioritate: "Mare", facut: false },
+  { id: 3, clientId: 4, clientNume: "Elena Radu", data: todayStr(), ora: "14:00", tip: "Apel", descriere: "Prim contact - informații generale despre parcele disponibile", prioritate: "Medie", facut: false },
+  { id: 4, clientId: 2, clientNume: "Maria Ionescu", data: tomorrowStr(), ora: "11:00", tip: "Confirmare vizionare", descriere: "Confirmare vizionare P7 pentru weekend", prioritate: "Mare", facut: false }
+];
+
+// ─── UTILITARE ────────────────────────────────────────────────────────────────
+const formatCurrency = (v) => v ? `€${Number(v).toLocaleString("ro-RO")}` : "—";
+const formatDate = (d) => { if (!d) return "—"; const [y, m, z] = d.split("-"); return `${z}.${m}.${y}`; };
+const genId = () => Date.now();
+
+const STATUS_COLORS = {
+  "Lead Nou": "bg-slate-100 text-slate-600",
+  "Contactat": "bg-blue-100 text-blue-700",
+  "Interesat": "bg-amber-100 text-amber-700",
+  "Vizionare Programată": "bg-purple-100 text-purple-700",
+  "Negociere": "bg-orange-100 text-orange-700",
+  "Rezervat": "bg-indigo-100 text-indigo-700",
+  "Contract Semnat": "bg-emerald-100 text-emerald-700",
+  "Pierdut": "bg-red-100 text-red-600",
+};
+const PARCELA_STATUS_COLORS = {
+  "Liberă": "bg-emerald-100 text-emerald-700",
+  "Interes activ": "bg-amber-100 text-amber-700",
+  "Rezervată": "bg-indigo-100 text-indigo-700",
+  "Vândută": "bg-slate-200 text-slate-600",
+};
+const PRIORITATE_COLORS = {
+  "Mică": "bg-slate-100 text-slate-500",
+  "Medie": "bg-amber-100 text-amber-700",
+  "Mare": "bg-red-100 text-red-600",
+};
+const CONTRACT_COLORS = {
+  "Rezervare verbală": "bg-slate-100 text-slate-600",
+  "Avans primit": "bg-amber-100 text-amber-700",
+  "Antecontract": "bg-blue-100 text-blue-700",
+  "Contract final": "bg-emerald-100 text-emerald-700",
+  "Pierdut": "bg-red-100 text-red-600",
+};
+
+// ─── UI COMPONENTS ────────────────────────────────────────────────────────────
+const Badge = ({ label, colorClass }) =>
+  React.createElement('span', { className: `inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold ${colorClass}` }, label);
+
+const Card = ({ children, className = "" }) =>
+  React.createElement('div', { className: `bg-white rounded-2xl shadow-sm border border-slate-100 ${className}` }, children);
+
+const StatCard = ({ label, value, sub, accent = false, gold = false }) =>
+  React.createElement(Card, { className: `p-4 ${accent ? "bg-slate-800 border-slate-800" : gold ? "border-transparent" : ""}${gold ? " gold-gradient" : ""}` },
+    React.createElement('div', { className: `text-2xl font-bold ${accent || gold ? "text-white" : "text-slate-800"}` }, value),
+    React.createElement('div', { className: `text-sm mt-0.5 ${accent || gold ? "text-slate-200" : "text-slate-500"}` }, label),
+    sub && React.createElement('div', { className: `text-xs mt-1 text-slate-400` }, sub)
+  );
+
+const Btn = ({ children, onClick, variant = "primary", size = "md", className = "", disabled = false }) => {
+  const base = "inline-flex items-center justify-center font-semibold rounded-xl transition-all focus:outline-none focus:ring-2 focus:ring-offset-1 disabled:opacity-50 disabled:cursor-not-allowed";
+  const sizes = { sm: "px-3 py-1.5 text-xs", md: "px-4 py-2 text-sm", lg: "px-6 py-3 text-base" };
+  const variants = {
+    primary: "bg-slate-800 text-white hover:bg-slate-700 focus:ring-slate-600",
+    gold: "gold-gradient text-white hover:opacity-90 focus:ring-yellow-500",
+    danger: "bg-red-500 text-white hover:bg-red-600 focus:ring-red-400",
+    ghost: "bg-transparent text-slate-600 hover:bg-slate-100 focus:ring-slate-300",
+    outline: "bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 focus:ring-slate-300",
+  };
+  return React.createElement('button', { onClick, disabled, className: `${base} ${sizes[size]} ${variants[variant]} ${className}` }, children);
+};
+
+const Input = ({ label, type = "text", value, onChange, placeholder = "", className = "", required = false }) =>
+  React.createElement('div', { className },
+    label && React.createElement('label', { className: "block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1" },
+      label, required && React.createElement('span', { className: "text-red-400 ml-1" }, "*")
+    ),
+    React.createElement('input', {
+      type, value: value || "", onChange: e => onChange(e.target.value), placeholder,
+      className: "w-full px-3 py-2 rounded-xl border border-slate-200 bg-white text-slate-800 text-sm focus:outline-none focus:ring-2 focus:ring-slate-600 focus:border-transparent transition"
+    })
+  );
+
+const Select = ({ label, value, onChange, options, className = "", placeholder = "Selectează..." }) =>
+  React.createElement('div', { className },
+    label && React.createElement('label', { className: "block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1" }, label),
+    React.createElement('select', {
+      value: value || "", onChange: e => onChange(e.target.value),
+      className: "w-full px-3 py-2 rounded-xl border border-slate-200 bg-white text-slate-800 text-sm focus:outline-none focus:ring-2 focus:ring-slate-600 focus:border-transparent transition"
+    },
+      React.createElement('option', { value: "" }, placeholder),
+      options.map(o => React.createElement('option', { key: o, value: o }, o))
+    )
+  );
+
+const Textarea = ({ label, value, onChange, placeholder = "", rows = 3, className = "" }) =>
+  React.createElement('div', { className },
+    label && React.createElement('label', { className: "block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1" }, label),
+    React.createElement('textarea', {
+      value: value || "", onChange: e => onChange(e.target.value), placeholder, rows,
+      className: "w-full px-3 py-2 rounded-xl border border-slate-200 bg-white text-slate-800 text-sm focus:outline-none focus:ring-2 focus:ring-slate-600 focus:border-transparent transition resize-none"
+    })
+  );
+
+const Modal = ({ open, onClose, title, children, size = "md" }) => {
+  useEffect(() => {
+    document.body.style.overflow = open ? "hidden" : "";
+    return () => { document.body.style.overflow = ""; };
+  }, [open]);
+  if (!open) return null;
+  const widths = { sm: "max-w-md", md: "max-w-2xl", lg: "max-w-4xl", xl: "max-w-6xl" };
+  return React.createElement('div', {
+    onClick: onClose,
+    style: { position: "fixed", top: 0, left: 0, right: 0, bottom: 0, zIndex: 9999, backgroundColor: "rgba(0,0,0,0.45)", display: "flex", alignItems: "flex-start", justifyContent: "center", WebkitOverflowScrolling: "touch", overflowY: "auto", paddingBottom: "env(safe-area-inset-bottom, 16px)" }
+  },
+    React.createElement('div', {
+      onClick: e => e.stopPropagation(),
+      className: `bg-white rounded-2xl shadow-2xl w-full ${widths[size]} flex flex-col`,
+      style: { margin: "16px 12px", maxHeight: "calc(100vh - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px) - 32px)", minHeight: 0 }
+    },
+      React.createElement('div', { className: "flex items-center justify-between px-4 sm:px-6 py-3.5 sm:py-4 border-b border-slate-100 flex-shrink-0" },
+        React.createElement('h2', { className: "text-base sm:text-lg font-bold text-slate-800 truncate pr-2" }, title),
+        React.createElement('button', { onClick: onClose, className: "w-8 h-8 flex items-center justify-center rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-600 flex-shrink-0" }, "✕")
+      ),
+      React.createElement('div', { style: { overflowY: "auto", WebkitOverflowScrolling: "touch", overscrollBehavior: "contain", flex: 1 }, className: "px-4 sm:px-6 py-4 sm:py-5" }, children)
+    )
+  );
+};
+
+// ─── SIDEBAR ────────────────────────────────────────────────────────────────
+const NAV_ITEMS = [
+  { id: "dashboard", icon: "⊞", label: "Dashboard" },
+  { id: "leads", icon: "👥", label: "Leaduri" },
+  { id: "parcele", icon: "🗺", label: "Parcele" },
+  { id: "vizionari", icon: "📅", label: "Vizionări" },
+  { id: "contracte", icon: "📋", label: "Contracte" },
+  { id: "remindere", icon: "🔔", label: "Remindere" },
+];
+
+const Sidebar = ({ active, setActive, sidebarOpen, setSidebarOpen }) =>
+  React.createElement(React.Fragment, null,
+    sidebarOpen && React.createElement('div', { className: "fixed inset-0 bg-black/40 z-20 lg:hidden", onClick: () => setSidebarOpen(false) }),
+    React.createElement('aside', {
+      className: `fixed top-0 left-0 h-full w-64 bg-slate-900 z-30 flex flex-col transition-transform duration-300 ${sidebarOpen ? "translate-x-0" : "-translate-x-full"} lg:translate-x-0`,
+      style: { paddingTop: "env(safe-area-inset-top, 0px)", paddingBottom: "env(safe-area-inset-bottom, 0px)", paddingLeft: "env(safe-area-inset-left, 0px)" }
+    },
+      React.createElement('div', { className: "p-6 border-b border-white/10" },
+        React.createElement('div', { className: "flex items-center gap-3" },
+          React.createElement('div', { className: "w-9 h-9 rounded-xl gold-gradient flex items-center justify-center text-white font-bold text-sm" }, "🏡"),
+          React.createElement('div', null,
+            React.createElement('div', { className: "text-white font-bold text-sm leading-tight" }, "Imobiliare CRM"),
+            React.createElement('div', { className: "text-slate-400 text-xs" }, "Parcele & Terenuri")
+          )
+        )
+      ),
+      React.createElement('nav', { className: "flex-1 p-4 space-y-1 overflow-y-auto" },
+        NAV_ITEMS.map(item =>
+          React.createElement('button', {
+            key: item.id,
+            onClick: () => { setActive(item.id); setSidebarOpen(false); },
+            className: `w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${active === item.id ? "bg-white/15 text-white" : "text-slate-400 hover:bg-white/10 hover:text-slate-200"}`
+          },
+            React.createElement('span', { className: "text-base" }, item.icon),
+            React.createElement('span', null, item.label)
+          )
+        )
+      ),
+      React.createElement('div', { className: "p-4 border-t border-white/10" },
+        React.createElement('div', { className: "flex items-center gap-3 px-3 py-2" },
+          React.createElement('div', { className: "w-8 h-8 rounded-full gold-gradient flex items-center justify-center text-white text-xs font-bold" }, "A"),
+          React.createElement('div', null,
+            React.createElement('div', { className: "text-white text-sm font-medium" }, "Admin"),
+            React.createElement('div', { className: "text-slate-400 text-xs" }, "Administrator")
+          )
+        )
+      )
+    )
+  );
+
+// ─── DASHBOARD ────────────────────────────────────────────────────────────────
+const Dashboard = ({ leads, parcele, vizionari, remindere, setActive }) => {
+  const azi = todayStr();
+  const deResunat = leads.filter(l => l.dataUrmatorApel === azi).length;
+  const vizionariAzi = vizionari.filter(v => v.data === azi && v.status === "Programată").length;
+  const negocieri = leads.filter(l => l.status === "Negociere").length;
+  const rezervate = parcele.filter(p => p.status === "Rezervată").length;
+  const vandute = parcele.filter(p => p.status === "Vândută").length;
+  const valPotentiala = leads.filter(l => !["Pierdut", "Contract Semnat"].includes(l.status)).reduce((s, l) => s + (l.pretTotalComunicat || 0), 0);
+  const valRezervari = parcele.filter(p => p.status === "Rezervată").reduce((s, p) => s + (p.pretTotal || 0), 0);
+  const deResunatLista = leads.filter(l => l.dataUrmatorApel === azi).sort((a, b) => (a.oraUrmatorApel || "").localeCompare(b.oraUrmatorApel || ""));
+  const reminderAzi = remindere.filter(r => !r.facut && r.data === azi);
+
+  return React.createElement('div', { className: "space-y-6" },
+    React.createElement('div', null,
+      React.createElement('h1', { className: "text-2xl font-bold text-slate-800" }, "Dashboard"),
+      React.createElement('p', { className: "text-slate-500 text-sm mt-1" }, "Bun venit! Iată situația de azi.")
+    ),
+    React.createElement('div', { className: "grid grid-cols-2 md:grid-cols-4 gap-3" },
+      React.createElement(StatCard, { label: "Total Leaduri", value: leads.length }),
+      React.createElement(StatCard, { label: "Leaduri Noi", value: leads.filter(l => l.status === "Lead Nou").length, accent: true }),
+      React.createElement(StatCard, { label: "De Resunat Azi", value: deResunat, gold: true }),
+      React.createElement(StatCard, { label: "Vizionări Azi", value: vizionariAzi }),
+      React.createElement(StatCard, { label: "Negocieri Active", value: negocieri }),
+      React.createElement(StatCard, { label: "Rezervate", value: rezervate }),
+      React.createElement(StatCard, { label: "Vândute", value: vandute }),
+      React.createElement(StatCard, { label: "Valoare Rezervări", value: formatCurrency(valRezervari), gold: true })
+    ),
+    React.createElement(Card, { className: "p-4" },
+      React.createElement('div', { className: "font-bold text-slate-800 text-sm mb-2" }, "Valoare Potențială Pipeline"),
+      React.createElement('div', { className: "text-3xl font-bold text-yellow-600" }, formatCurrency(valPotentiala)),
+      React.createElement('div', { className: "text-xs text-slate-400 mt-1" }, `${leads.filter(l => !["Pierdut", "Contract Semnat"].includes(l.status)).length} leaduri active`)
+    ),
+    React.createElement(Card, { className: "overflow-hidden" },
+      React.createElement('div', { className: "px-5 py-4 border-b border-slate-100 flex items-center justify-between" },
+        React.createElement('div', { className: "font-bold text-slate-800 text-sm flex items-center gap-2" },
+          React.createElement('span', { className: "w-2 h-2 rounded-full bg-red-400 animate-pulse-dot inline-block" }),
+          `De Resunat Azi (${deResunat})`
+        ),
+        React.createElement('button', { onClick: () => setActive("leads"), className: "text-xs text-yellow-600 font-semibold hover:underline" }, "Vezi toate →")
+      ),
+      deResunatLista.length === 0
+        ? React.createElement('div', { className: "p-8 text-center text-slate-400 text-sm" }, "✅ Niciun apel programat pentru azi!")
+        : React.createElement('div', { className: "divide-y divide-slate-50" },
+            deResunatLista.map(lead =>
+              React.createElement('div', { key: lead.id, className: "px-5 py-3 flex items-center gap-4 hover:bg-slate-50" },
+                React.createElement('div', { className: "w-9 h-9 rounded-full bg-slate-800 flex items-center justify-center text-white text-sm font-bold flex-shrink-0" }, lead.nume.charAt(0)),
+                React.createElement('div', { className: "flex-1 min-w-0" },
+                  React.createElement('div', { className: "font-semibold text-slate-800 text-sm truncate" }, lead.nume),
+                  React.createElement('div', { className: "text-xs text-slate-500" }, `${lead.telefon} • ${lead.oraUrmatorApel} • ${lead.motivFollowUp}`)
+                ),
+                React.createElement('div', { className: "flex items-center gap-2 flex-shrink-0" },
+                  React.createElement(Badge, { label: lead.prioritate, colorClass: PRIORITATE_COLORS[lead.prioritate] }),
+                  React.createElement(Badge, { label: lead.status, colorClass: STATUS_COLORS[lead.status] })
+                )
+              )
+            )
+          )
+    ),
+    reminderAzi.length > 0 && React.createElement(Card, { className: "overflow-hidden" },
+      React.createElement('div', { className: "px-5 py-4 border-b border-slate-100 flex items-center justify-between" },
+        React.createElement('div', { className: "font-bold text-slate-800 text-sm" }, `🔔 Remindere Azi (${reminderAzi.length})`),
+        React.createElement('button', { onClick: () => setActive("remindere"), className: "text-xs text-yellow-600 font-semibold hover:underline" }, "Vezi toate →")
+      ),
+      React.createElement('div', { className: "divide-y divide-slate-50" },
+        reminderAzi.map(r =>
+          React.createElement('div', { key: r.id, className: "px-5 py-3 flex items-center gap-3 hover:bg-slate-50" },
+            React.createElement('div', { className: "flex-1 min-w-0" },
+              React.createElement('div', { className: "font-semibold text-sm text-slate-800" }, r.clientNume),
+              React.createElement('div', { className: "text-xs text-slate-500" }, `${r.ora} • ${r.tip} • ${r.descriere}`)
+            ),
+            React.createElement(Badge, { label: r.prioritate, colorClass: PRIORITATE_COLORS[r.prioritate] })
+          )
+        )
+      )
+    )
+  );
+};
+
+// ─── LEAD FORM ────────────────────────────────────────────────────────────────
+const LeadForm = ({ f, set }) =>
+  React.createElement('div', { className: "space-y-6" },
+    React.createElement('div', null,
+      React.createElement('h3', { className: "text-sm font-bold text-slate-800 uppercase tracking-wide mb-3 pb-2 border-b border-slate-100" }, "Date Client"),
+      React.createElement('div', { className: "grid grid-cols-1 sm:grid-cols-2 gap-3" },
+        React.createElement(Input, { label: "Nume complet", value: f.nume, onChange: set("nume"), required: true, className: "sm:col-span-2" }),
+        React.createElement(Input, { label: "Telefon", value: f.telefon, onChange: set("telefon"), required: true }),
+        React.createElement(Input, { label: "Email", type: "email", value: f.email, onChange: set("email") }),
+        React.createElement(Input, { label: "Oraș", value: f.oras, onChange: set("oras") }),
+        React.createElement(Select, { label: "Sursă Lead", value: f.sursa, onChange: set("sursa"), options: SURSE }),
+        React.createElement(Input, { label: "Data intrare CRM", type: "date", value: f.dataIntrare, onChange: set("dataIntrare") })
+      )
+    ),
+    React.createElement('div', null,
+      React.createElement('h3', { className: "text-sm font-bold text-slate-800 uppercase tracking-wide mb-3 pb-2 border-b border-slate-100" }, "Interes Imobiliar"),
+      React.createElement('div', { className: "grid grid-cols-1 sm:grid-cols-2 gap-3" },
+        React.createElement(Input, { label: "Suprafață min (mp)", type: "number", value: f.suprafataDoritaMin, onChange: set("suprafataDoritaMin") }),
+        React.createElement(Input, { label: "Suprafață max (mp)", type: "number", value: f.suprafataDoritaMax, onChange: set("suprafataDoritaMax") }),
+        React.createElement(Select, { label: "Parcelă interesată", value: f.parcelaInteresata, onChange: set("parcelaInteresata"), options: PARCELE_OPTIONS }),
+        React.createElement(Input, { label: "Buget total (€)", type: "number", value: f.bugetTotal, onChange: set("bugetTotal") }),
+        React.createElement(Input, { label: "Avans disponibil (€)", type: "number", value: f.avansDisponibil, onChange: set("avansDisponibil") }),
+        React.createElement(Select, { label: "Modalitate plată", value: f.modalitataPlata, onChange: set("modalitataPlata"), options: MODALITATI_PLATA }),
+        React.createElement(Input, { label: "Preț/mp comunicat (€)", type: "number", value: f.pretMpComunicat, onChange: set("pretMpComunicat") }),
+        React.createElement(Input, { label: "Preț total comunicat (€)", type: "number", value: f.pretTotalComunicat, onChange: set("pretTotalComunicat") }),
+        React.createElement(Select, { label: "Termen cumpărare", value: f.termen, onChange: set("termen"), options: TERMENE }),
+        React.createElement(Select, { label: "Scop achiziție", value: f.scop, onChange: set("scop"), options: SCOPURI })
+      )
+    ),
+    React.createElement('div', null,
+      React.createElement('h3', { className: "text-sm font-bold text-slate-800 uppercase tracking-wide mb-3 pb-2 border-b border-slate-100" }, "Status & Follow-up"),
+      React.createElement('div', { className: "grid grid-cols-1 sm:grid-cols-2 gap-3" },
+        React.createElement(Select, { label: "Status Lead", value: f.status, onChange: set("status"), options: STATUS_LEAD }),
+        React.createElement(Select, { label: "Prioritate", value: f.prioritate, onChange: set("prioritate"), options: PRIORITATI }),
+        React.createElement(Input, { label: "Data următor apel", type: "date", value: f.dataUrmatorApel, onChange: set("dataUrmatorApel") }),
+        React.createElement(Input, { label: "Ora următor apel", type: "time", value: f.oraUrmatorApel, onChange: set("oraUrmatorApel") }),
+        React.createElement(Input, { label: "Motiv follow-up", value: f.motivFollowUp, onChange: set("motivFollowUp"), className: "sm:col-span-2" }),
+        React.createElement(Input, { label: "Ultimul contact", type: "date", value: f.ultimulContact, onChange: set("ultimulContact") }),
+        React.createElement(Input, { label: "Următorul pas", value: f.urmatoPas, onChange: set("urmatoPas") })
+      )
+    ),
+    React.createElement('div', null,
+      React.createElement('h3', { className: "text-sm font-bold text-slate-800 uppercase tracking-wide mb-3 pb-2 border-b border-slate-100" }, "Notițe"),
+      React.createElement('div', { className: "grid grid-cols-1 sm:grid-cols-2 gap-3" },
+        React.createElement(Textarea, { label: "Observații generale", value: f.observatii, onChange: set("observatii"), className: "sm:col-span-2" }),
+        React.createElement(Textarea, { label: "Obiecții client", value: f.obiectii, onChange: set("obiectii") }),
+        React.createElement(Textarea, { label: "Ce i-am promis", value: f.ceAmPromis, onChange: set("ceAmPromis") }),
+        React.createElement(Textarea, { label: "Documente necesare", value: f.documente, onChange: set("documente"), className: "sm:col-span-2" })
+      )
+    )
+  );
+
+// ─── ACTIVITATE FORM ────────────────────────────────────────────────────────
+const ActivitateForm = ({ onSave, onCancel }) => {
+  const [f, setF] = useState({ data: todayStr(), ora: "09:00", tip: "Apel telefonic", descriere: "", rezultat: "", urmatPas: "", dataFollowUp: "" });
+  const set = (k) => (v) => setF(p => ({ ...p, [k]: v }));
+  return React.createElement('div', { className: "space-y-4" },
+    React.createElement('div', { className: "grid grid-cols-2 gap-3" },
+      React.createElement(Input, { label: "Data", type: "date", value: f.data, onChange: set("data") }),
+      React.createElement(Input, { label: "Ora", type: "time", value: f.ora, onChange: set("ora") }),
+      React.createElement(Select, { label: "Tip activitate", value: f.tip, onChange: set("tip"), options: TIP_ACTIVITATE, className: "col-span-2" })
+    ),
+    React.createElement(Textarea, { label: "Descriere discuție", value: f.descriere, onChange: set("descriere"), rows: 3 }),
+    React.createElement(Textarea, { label: "Rezultat", value: f.rezultat, onChange: set("rezultat"), rows: 2 }),
+    React.createElement(Input, { label: "Următorul pas", value: f.urmatPas, onChange: set("urmatPas") }),
+    React.createElement(Input, { label: "Data follow-up", type: "date", value: f.dataFollowUp, onChange: set("dataFollowUp") }),
+    React.createElement('div', { className: "flex gap-3 justify-end" },
+      React.createElement(Btn, { variant: "outline", onClick: onCancel }, "Anulează"),
+      React.createElement(Btn, { variant: "primary", onClick: () => onSave({ ...f, id: genId() }) }, "Adaugă Activitate")
+    )
+  );
+};
+
+// ─── LEADS ──────────────────────────────────────────────────────────────────
+const EMPTY_LEAD = { nume: "", telefon: "", email: "", oras: "", sursa: "", dataIntrare: todayStr(), suprafataDoritaMin: "", suprafataDoritaMax: "", parcelaInteresata: "", bugetTotal: "", avansDisponibil: "", modalitataPlata: "", pretMpComunicat: "", pretTotalComunicat: "", termen: "", scop: "", status: "Lead Nou", dataUrmatorApel: todayStr(), oraUrmatorApel: "09:00", motivFollowUp: "", prioritate: "Medie", ultimulContact: "", urmatoPas: "", observatii: "", obiectii: "", ceAmPromis: "", documente: "", activitati: [] };
+
+const Leads = ({ leads, setLeads }) => {
+  const [search, setSearch] = useState("");
+  const [filterStatus, setFilterStatus] = useState("");
+  const [filterSursa, setFilterSursa] = useState("");
+  const [filterAzi, setFilterAzi] = useState(false);
+  const [showForm, setShowForm] = useState(false);
+  const [editing, setEditing] = useState(null);
+  const [formData, setFormData] = useState(EMPTY_LEAD);
+  const [viewLead, setViewLead] = useState(null);
+  const [showActForm, setShowActForm] = useState(false);
+  const azi = todayStr();
+  const setF = (k) => (v) => setFormData(p => ({ ...p, [k]: v }));
+
+  const filtered = useMemo(() => leads.filter(l => {
+    if (search && !l.nume?.toLowerCase().includes(search.toLowerCase()) && !l.telefon?.includes(search) && !l.parcelaInteresata?.includes(search)) return false;
+    if (filterStatus && l.status !== filterStatus) return false;
+    if (filterSursa && l.sursa !== filterSursa) return false;
+    if (filterAzi && l.dataUrmatorApel !== azi) return false;
+    return true;
+  }), [leads, search, filterStatus, filterSursa, filterAzi, azi]);
+
+  const openForm = (lead = null) => { setEditing(lead); setFormData(lead || EMPTY_LEAD); setShowForm(true); };
+  const saveLead = () => {
+    if (!formData.nume || !formData.telefon) { alert("Completează numele și telefonul!"); return; }
+    if (editing) { setLeads(prev => prev.map(l => l.id === editing.id ? { ...editing, ...formData } : l)); }
+    else { setLeads(prev => [...prev, { ...formData, id: genId(), activitati: [] }]); }
+    setShowForm(false); setEditing(null);
+  };
+  const deleteLead = (id) => { if (window.confirm("Ștergi lead-ul?")) setLeads(prev => prev.filter(l => l.id !== id)); };
+  const saveActivitate = (act) => {
+    setLeads(prev => prev.map(l => l.id === viewLead.id ? { ...l, activitati: [...(l.activitati || []), act], ultimulContact: todayStr() } : l));
+    setViewLead(prev => ({ ...prev, activitati: [...(prev.activitati || []), act] }));
+    setShowActForm(false);
+  };
+  const exportCSV = () => {
+    const headers = ["Nume","Telefon","Email","Oraș","Sursă","Status","Parcelă","Buget","Avans","Plată","Data Apel"];
+    const rows = leads.map(l => [l.nume, l.telefon, l.email, l.oras, l.sursa, l.status, l.parcelaInteresata, l.bugetTotal, l.avansDisponibil, l.modalitataPlata, l.dataUrmatorApel]);
+    const csv = [headers, ...rows].map(r => r.map(v => `"${v || ""}"`).join(",")).join("\n");
+    const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a"); a.href = url; a.download = "leads-crm.csv"; a.click();
+  };
+
+  return React.createElement('div', { className: "space-y-4" },
+    React.createElement('div', { className: "flex items-start justify-between flex-wrap gap-3" },
+      React.createElement('div', null,
+        React.createElement('h1', { className: "text-2xl font-bold text-slate-800" }, "Leaduri"),
+        React.createElement('p', { className: "text-slate-500 text-sm" }, `${filtered.length} din ${leads.length} leaduri`)
+      ),
+      React.createElement('div', { className: "flex gap-2" },
+        React.createElement(Btn, { variant: "outline", size: "sm", onClick: exportCSV }, "⬇ Export CSV"),
+        React.createElement(Btn, { variant: "gold", size: "sm", onClick: () => openForm() }, "+ Adaugă Lead")
+      )
+    ),
+    React.createElement(Card, { className: "p-4" },
+      React.createElement('div', { className: "grid grid-cols-2 md:grid-cols-4 gap-2 sm:gap-3" },
+        React.createElement('input', { value: search, onChange: e => setSearch(e.target.value), placeholder: "🔍 Caută nume, telefon, parcelă...", className: "col-span-2 md:col-span-1 px-3 py-2 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-slate-600" }),
+        React.createElement('select', { value: filterStatus, onChange: e => setFilterStatus(e.target.value), className: "px-3 py-2 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-slate-600 bg-white" },
+          React.createElement('option', { value: "" }, "Toate statusurile"),
+          STATUS_LEAD.map(s => React.createElement('option', { key: s }, s))
+        ),
+        React.createElement('select', { value: filterSursa, onChange: e => setFilterSursa(e.target.value), className: "px-3 py-2 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-slate-600 bg-white" },
+          React.createElement('option', { value: "" }, "Toate sursele"),
+          SURSE.map(s => React.createElement('option', { key: s }, s))
+        ),
+        React.createElement('label', { className: "flex items-center gap-2 cursor-pointer" },
+          React.createElement('input', { type: "checkbox", checked: filterAzi, onChange: e => setFilterAzi(e.target.checked), className: "w-4 h-4" }),
+          React.createElement('span', { className: "text-sm text-slate-600 font-medium" }, "De resunat azi")
+        )
+      )
+    ),
+    React.createElement('div', { className: "space-y-3" },
+      filtered.length === 0 && React.createElement(Card, { className: "p-10 text-center text-slate-400" }, "Niciun lead găsit."),
+      filtered.map(lead =>
+        React.createElement(Card, { key: lead.id, className: "p-4 hover:shadow-md transition-shadow" },
+          React.createElement('div', { className: "flex flex-col sm:flex-row items-start gap-3 sm:gap-4" },
+            React.createElement('div', { className: "flex items-start gap-3 flex-1 min-w-0 w-full" },
+              React.createElement('div', { className: "w-10 h-10 rounded-full bg-slate-800 flex items-center justify-center text-white font-bold text-sm flex-shrink-0" }, lead.nume?.charAt(0) || "?"),
+              React.createElement('div', { className: "flex-1 min-w-0" },
+              React.createElement('div', { className: "flex items-start justify-between gap-2 flex-wrap" },
+                React.createElement('div', null,
+                  React.createElement('span', { className: "font-bold text-slate-800" }, lead.nume),
+                  lead.dataUrmatorApel === azi && React.createElement('span', { className: "ml-2 inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-red-100 text-red-600" }, "🔴 Azi")
+                ),
+                React.createElement('div', { className: "flex gap-1.5 flex-wrap" },
+                  React.createElement(Badge, { label: lead.prioritate, colorClass: PRIORITATE_COLORS[lead.prioritate] }),
+                  React.createElement(Badge, { label: lead.status, colorClass: STATUS_COLORS[lead.status] })
+                )
+              ),
+              React.createElement('div', { className: "mt-1.5 flex flex-wrap gap-x-4 gap-y-1 text-sm text-slate-500" },
+                React.createElement('span', null, `📞 ${lead.telefon}`),
+                lead.parcelaInteresata && React.createElement('span', null, `🗺 ${lead.parcelaInteresata}`),
+                lead.suprafataDoritaMin && React.createElement('span', null, `📐 ${lead.suprafataDoritaMin}–${lead.suprafataDoritaMax} mp`),
+                lead.bugetTotal && React.createElement('span', null, `💶 ${formatCurrency(lead.bugetTotal)}`),
+                lead.modalitataPlata && React.createElement('span', null, `💳 ${lead.modalitataPlata}`)
+              ),
+              lead.dataUrmatorApel && React.createElement('div', { className: "mt-1.5 text-xs text-slate-400" },
+                "📅 Următor apel: ", React.createElement('span', { className: "font-semibold text-slate-600" }, `${formatDate(lead.dataUrmatorApel)} ${lead.oraUrmatorApel}`),
+                lead.motivFollowUp && ` • ${lead.motivFollowUp}`
+              ),
+              lead.observatii && React.createElement('div', { className: "mt-1 text-xs text-slate-400 truncate" }, `💬 ${lead.observatii}`)
+              )
+            ),
+            React.createElement('div', { className: "flex gap-1.5 flex-shrink-0 self-end sm:self-start w-full sm:w-auto justify-end" },
+              React.createElement(Btn, { variant: "ghost", size: "sm", onClick: () => setViewLead(lead) }, "Detalii"),
+              React.createElement(Btn, { variant: "outline", size: "sm", onClick: () => openForm(lead) }, "✏"),
+              React.createElement(Btn, { variant: "danger", size: "sm", onClick: () => deleteLead(lead.id) }, "🗑")
+            )
+          )
+        )
+      )
+    ),
+
+    // Add/Edit Lead Modal
+    React.createElement(Modal, { open: showForm, onClose: () => { setShowForm(false); setEditing(null); }, title: editing ? "Editează Lead" : "Lead Nou", size: "lg" },
+      React.createElement('div', { className: "space-y-4" },
+        React.createElement(LeadForm, { f: formData, set: setF }),
+        React.createElement('div', { className: "flex gap-3 justify-end pt-2 border-t border-slate-100" },
+          React.createElement(Btn, { variant: "outline", onClick: () => { setShowForm(false); setEditing(null); } }, "Anulează"),
+          React.createElement(Btn, { variant: "gold", onClick: saveLead }, "💾 Salvează Lead")
+        )
+      )
+    ),
+
+    // View Lead Modal
+    React.createElement(Modal, { open: !!viewLead, onClose: () => setViewLead(null), title: viewLead?.nume || "", size: "lg" },
+      viewLead && React.createElement('div', { className: "space-y-5" },
+        React.createElement('div', { className: "grid grid-cols-2 md:grid-cols-3 gap-3 text-sm" },
+          ...[
+            ["Telefon", viewLead.telefon],
+            ["Email", viewLead.email || "—"],
+            ["Oraș", viewLead.oras || "—"],
+            ["Parcelă", viewLead.parcelaInteresata || "—"],
+            ["Suprafață dorită", viewLead.suprafataDoritaMin ? `${viewLead.suprafataDoritaMin}–${viewLead.suprafataDoritaMax} mp` : "—"],
+            ["Buget", formatCurrency(viewLead.bugetTotal)],
+            ["Avans", formatCurrency(viewLead.avansDisponibil)],
+            ["Plată", viewLead.modalitataPlata || "—"],
+            ["Termen", viewLead.termen || "—"],
+            ["Scop", viewLead.scop || "—"],
+            ["Sursă", viewLead.sursa || "—"],
+          ].map(([lbl, val]) =>
+            React.createElement('div', { key: lbl },
+              React.createElement('span', { className: "text-slate-400 text-xs" }, lbl),
+              React.createElement('div', { className: "font-semibold" }, val)
+            )
+          ),
+          React.createElement('div', { key: "status" },
+            React.createElement('span', { className: "text-slate-400 text-xs" }, "Status"),
+            React.createElement('div', { className: "mt-0.5" }, React.createElement(Badge, { label: viewLead.status, colorClass: STATUS_COLORS[viewLead.status] }))
+          ),
+          React.createElement('div', { key: "prioritate" },
+            React.createElement('span', { className: "text-slate-400 text-xs" }, "Prioritate"),
+            React.createElement('div', { className: "mt-0.5" }, React.createElement(Badge, { label: viewLead.prioritate, colorClass: PRIORITATE_COLORS[viewLead.prioritate] }))
+          )
+        ),
+        viewLead.observatii && React.createElement('div', { className: "bg-slate-50 rounded-xl p-3" },
+          React.createElement('div', { className: "text-xs text-slate-400 font-semibold mb-1 uppercase" }, "Observații"),
+          React.createElement('div', { className: "text-sm text-slate-700" }, viewLead.observatii)
+        ),
+        viewLead.obiectii && React.createElement('div', { className: "bg-amber-50 rounded-xl p-3" },
+          React.createElement('div', { className: "text-xs text-amber-600 font-semibold mb-1 uppercase" }, "Obiecții"),
+          React.createElement('div', { className: "text-sm text-slate-700" }, viewLead.obiectii)
+        ),
+        viewLead.ceAmPromis && React.createElement('div', { className: "bg-blue-50 rounded-xl p-3" },
+          React.createElement('div', { className: "text-xs text-blue-600 font-semibold mb-1 uppercase" }, "Ce i-am promis"),
+          React.createElement('div', { className: "text-sm text-slate-700" }, viewLead.ceAmPromis)
+        ),
+        React.createElement('div', null,
+          React.createElement('div', { className: "flex items-center justify-between mb-3" },
+            React.createElement('h3', { className: "font-bold text-slate-800 text-sm" }, `Istoric Discuții (${(viewLead.activitati || []).length})`),
+            React.createElement(Btn, { variant: "primary", size: "sm", onClick: () => setShowActForm(true) }, "+ Adaugă Activitate")
+          ),
+          (viewLead.activitati || []).length === 0
+            ? React.createElement('div', { className: "text-center text-slate-400 text-sm py-6 bg-slate-50 rounded-xl" }, "Nicio activitate înregistrată încă.")
+            : React.createElement('div', { className: "space-y-2" },
+                [...(viewLead.activitati || [])].reverse().map(act =>
+                  React.createElement('div', { key: act.id, className: "bg-slate-50 rounded-xl p-3" },
+                    React.createElement('div', { className: "flex items-center gap-2 text-xs text-slate-500 mb-1" },
+                      React.createElement('span', { className: "font-semibold text-slate-700" }, act.tip),
+                      React.createElement('span', null, "•"),
+                      React.createElement('span', null, `${formatDate(act.data)} ${act.ora}`)
+                    ),
+                    act.descriere && React.createElement('div', { className: "text-sm text-slate-700" }, act.descriere),
+                    act.rezultat && React.createElement('div', { className: "text-xs text-slate-500 mt-1" }, `Rezultat: ${act.rezultat}`),
+                    act.urmatPas && React.createElement('div', { className: "text-xs text-yellow-600 mt-1 font-semibold" }, `→ ${act.urmatPas}`),
+                    act.dataFollowUp && React.createElement('div', { className: "text-xs text-slate-400 mt-0.5" }, `Follow-up: ${formatDate(act.dataFollowUp)}`)
+                  )
+                )
+              )
+        ),
+        React.createElement('div', { className: "pt-4 border-t border-slate-100 flex gap-3 justify-end" },
+          React.createElement(Btn, { variant: "outline", onClick: () => setViewLead(null) }, "Închide"),
+          React.createElement(Btn, { variant: "gold", onClick: () => { setEditing(viewLead); setViewLead(null); openForm(viewLead); } }, "✏ Editează Lead")
+        )
+      )
+    ),
+
+    // Activitate Modal
+    React.createElement(Modal, { open: showActForm, onClose: () => setShowActForm(false), title: "Adaugă Activitate", size: "sm" },
+      React.createElement(ActivitateForm, { onSave: saveActivitate, onCancel: () => setShowActForm(false) })
+    )
+  );
+};
+
+// ─── PARCELE ────────────────────────────────────────────────────────────────
+const emptyP = { cod: "", suprafata: "", pretMp: "", pretTotal: "", status: "Liberă", clientAsociat: "", avansPrivit: "", termenPlata: "", observatii: "", linkMaps: "", utilitati: [], frontStradal: "", deschidere: "", adancime: "" };
+
+const Parcele = ({ parcele, setParcele }) => {
+  const [showForm, setShowForm] = useState(false);
+  const [editing, setEditing] = useState(null);
+  const [filterStatus, setFilterStatus] = useState("");
+  const [f, setFState] = useState(emptyP);
+  const set = (k) => (v) => setFState(p => ({ ...p, [k]: v }));
+  const toggleUtil = (u) => setFState(p => ({ ...p, utilitati: p.utilitati.includes(u) ? p.utilitati.filter(x => x !== u) : [...p.utilitati, u] }));
+  const openForm = (p = null) => { setEditing(p); setFState(p || emptyP); setShowForm(true); };
+  const saveP = () => {
+    if (!f.cod) { alert("Selectează codul parcelei!"); return; }
+    if (editing) { setParcele(prev => prev.map(p => p.id === editing.id ? { ...editing, ...f } : p)); }
+    else { setParcele(prev => [...prev, { ...f, id: genId() }]); }
+    setShowForm(false); setEditing(null);
+  };
+  const filtered = parcele.filter(p => !filterStatus || p.status === filterStatus);
+
+  return React.createElement('div', { className: "space-y-4" },
+    React.createElement('div', { className: "flex items-start justify-between flex-wrap gap-3" },
+      React.createElement('div', null,
+        React.createElement('h1', { className: "text-2xl font-bold text-slate-800" }, "Parcele"),
+        React.createElement('p', { className: "text-slate-500 text-sm" }, `${parcele.filter(p => p.status === "Liberă").length} libere din ${parcele.length}`)
+      ),
+      React.createElement(Btn, { variant: "gold", size: "sm", onClick: () => openForm() }, "+ Adaugă Parcelă")
+    ),
+    React.createElement('div', { className: "flex gap-2 flex-wrap" },
+      ["", ...STATUS_PARCELA].map(s =>
+        React.createElement('button', { key: s, onClick: () => setFilterStatus(s), className: `px-3 py-1.5 rounded-xl text-xs font-semibold transition-all ${filterStatus === s ? "bg-slate-800 text-white" : "bg-white border border-slate-200 text-slate-600 hover:bg-slate-50"}` }, s || "Toate")
+      )
+    ),
+    React.createElement('div', { className: "grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4" },
+      filtered.map(p =>
+        React.createElement(Card, { key: p.id, className: "p-4 hover:shadow-md transition-shadow" },
+          React.createElement('div', { className: "flex items-start justify-between mb-3" },
+            React.createElement('div', { className: "w-12 h-12 rounded-xl bg-slate-800 flex items-center justify-center text-white font-bold text-sm" }, p.cod),
+            React.createElement(Badge, { label: p.status, colorClass: PARCELA_STATUS_COLORS[p.status] })
+          ),
+          React.createElement('div', { className: "space-y-1.5 text-sm" },
+            React.createElement('div', { className: "flex justify-between" }, React.createElement('span', { className: "text-slate-500" }, "Suprafață"), React.createElement('span', { className: "font-semibold" }, `${p.suprafata} mp`)),
+            React.createElement('div', { className: "flex justify-between" }, React.createElement('span', { className: "text-slate-500" }, "Preț/mp"), React.createElement('span', { className: "font-semibold" }, `€${p.pretMp}/mp`)),
+            React.createElement('div', { className: "flex justify-between" }, React.createElement('span', { className: "text-slate-500" }, "Preț total"), React.createElement('span', { className: "font-bold text-yellow-600" }, formatCurrency(p.pretTotal))),
+            p.frontStradal && React.createElement('div', { className: "flex justify-between" }, React.createElement('span', { className: "text-slate-500" }, "Front stradal"), React.createElement('span', { className: "font-semibold" }, `${p.frontStradal}m`)),
+            p.clientAsociat && React.createElement('div', { className: "flex justify-between" }, React.createElement('span', { className: "text-slate-500" }, "Client"), React.createElement('span', { className: "font-semibold text-slate-800" }, p.clientAsociat))
+          ),
+          p.utilitati?.length > 0 && React.createElement('div', { className: "mt-3 flex flex-wrap gap-1" },
+            p.utilitati.map(u => React.createElement('span', { key: u, className: "px-2 py-0.5 bg-emerald-50 text-emerald-700 rounded-lg text-xs font-medium" }, u))
+          ),
+          p.observatii && React.createElement('div', { className: "mt-2 text-xs text-slate-400 truncate" }, p.observatii),
+          React.createElement('div', { className: "mt-3 flex gap-2 justify-end" },
+            p.linkMaps && React.createElement('a', { href: p.linkMaps, target: "_blank", rel: "noreferrer", className: "text-xs text-blue-500 hover:underline" }, "📍 Maps"),
+            React.createElement(Btn, { variant: "outline", size: "sm", onClick: () => openForm(p) }, "✏ Editează"),
+            React.createElement(Btn, { variant: "danger", size: "sm", onClick: () => { if (window.confirm("Ștergi parcela?")) setParcele(prev => prev.filter(x => x.id !== p.id)); } }, "🗑")
+          )
+        )
+      ),
+      filtered.length === 0 && React.createElement('div', { className: "col-span-3 text-center text-slate-400 py-12" }, "Nicio parcelă în această categorie.")
+    ),
+    React.createElement(Modal, { open: showForm, onClose: () => { setShowForm(false); setEditing(null); }, title: editing ? "Editează Parcelă" : "Parcelă Nouă", size: "md" },
+      React.createElement('div', { className: "space-y-4" },
+        React.createElement('div', { className: "grid grid-cols-1 sm:grid-cols-2 gap-3" },
+          React.createElement(Select, { label: "Cod parcelă", value: f.cod, onChange: set("cod"), options: PARCELE_OPTIONS, placeholder: "Selectează parcela..." }),
+          React.createElement(Select, { label: "Status", value: f.status, onChange: set("status"), options: STATUS_PARCELA }),
+          React.createElement(Input, { label: "Suprafață (mp)", type: "number", value: f.suprafata, onChange: set("suprafata") }),
+          React.createElement(Input, { label: "Preț/mp (€)", type: "number", value: f.pretMp, onChange: v => { set("pretMp")(v); set("pretTotal")(Math.round(v * f.suprafata)); } }),
+          React.createElement(Input, { label: "Preț total (€)", type: "number", value: f.pretTotal, onChange: set("pretTotal") }),
+          React.createElement(Input, { label: "Front stradal (m)", type: "number", value: f.frontStradal, onChange: set("frontStradal") }),
+          React.createElement(Input, { label: "Deschidere (m)", type: "number", value: f.deschidere, onChange: set("deschidere") }),
+          React.createElement(Input, { label: "Adâncime (m)", type: "number", value: f.adancime, onChange: set("adancime") })
+        ),
+        React.createElement('div', { className: "grid grid-cols-1 sm:grid-cols-2 gap-3" },
+          React.createElement(Input, { label: "Client asociat", value: f.clientAsociat, onChange: set("clientAsociat") }),
+          React.createElement(Input, { label: "Avans primit (€)", type: "number", value: f.avansPrivit, onChange: set("avansPrivit") }),
+          React.createElement(Input, { label: "Termen plată diferență", type: "date", value: f.termenPlata, onChange: set("termenPlata") }),
+          React.createElement(Input, { label: "Link Google Maps", value: f.linkMaps, onChange: set("linkMaps") })
+        ),
+        React.createElement('div', null,
+          React.createElement('label', { className: "block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2" }, "Utilități"),
+          React.createElement('div', { className: "flex gap-2 flex-wrap" },
+            UTILITATI.map(u =>
+              React.createElement('button', { key: u, type: "button", onClick: () => toggleUtil(u), className: `px-3 py-1.5 rounded-xl text-xs font-semibold transition-all ${f.utilitati?.includes(u) ? "bg-emerald-100 text-emerald-700 border-2 border-emerald-300" : "bg-white border border-slate-200 text-slate-600 hover:bg-slate-50"}` }, u)
+            )
+          )
+        ),
+        React.createElement(Textarea, { label: "Observații", value: f.observatii, onChange: set("observatii") }),
+        React.createElement('div', { className: "flex gap-3 justify-end" },
+          React.createElement(Btn, { variant: "outline", onClick: () => { setShowForm(false); setEditing(null); } }, "Anulează"),
+          React.createElement(Btn, { variant: "gold", onClick: saveP }, "Salvează Parcela")
+        )
+      )
+    )
+  );
+};
+
+// ─── VIZIONĂRI ────────────────────────────────────────────────────────────────
+const emptyV = { clientId: "", clientNume: "", telefon: "", parcele: [], data: todayStr(), ora: "10:00", locatie: "", status: "Programată", observatii: "", urmatPas: "" };
+
+const Vizionari = ({ vizionari, setVizionari }) => {
+  const [showForm, setShowForm] = useState(false);
+  const [editing, setEditing] = useState(null);
+  const [f, setFState] = useState(emptyV);
+  const set = (k) => (v) => setFState(p => ({ ...p, [k]: v }));
+  const toggleParcela = (p) => setFState(prev => ({ ...prev, parcele: prev.parcele.includes(p) ? prev.parcele.filter(x => x !== p) : [...prev.parcele, p] }));
+  const openForm = (v = null) => { setEditing(v); setFState(v || emptyV); setShowForm(true); };
+  const saveV = () => {
+    if (!f.clientNume || !f.data) { alert("Completează clientul și data!"); return; }
+    if (editing) { setVizionari(prev => prev.map(v => v.id === editing.id ? { ...editing, ...f } : v)); }
+    else { setVizionari(prev => [...prev, { ...f, id: genId() }]); }
+    setShowForm(false); setEditing(null);
+  };
+  const sorted = [...vizionari].sort((a, b) => (a.data + a.ora).localeCompare(b.data + b.ora));
+  const azi = todayStr();
+  const programateAzi = sorted.filter(v => v.data === azi && v.status === "Programată");
+  const urmatoare = sorted.filter(v => v.data > azi && v.status === "Programată");
+  const istoricV = sorted.filter(v => v.data < azi || v.status !== "Programată").reverse();
+
+  const VizSection = ({ title, items, badge }) =>
+    React.createElement('div', null,
+      React.createElement('div', { className: "flex items-center gap-2 mb-3" },
+        React.createElement('h2', { className: "font-bold text-slate-800 text-sm uppercase tracking-wide" }, title),
+        badge > 0 && React.createElement('span', { className: "gold-gradient text-white text-xs font-bold px-2 py-0.5 rounded-full" }, badge)
+      ),
+      items.length === 0
+        ? React.createElement('div', { className: "text-slate-400 text-sm py-4 bg-slate-50 rounded-xl text-center" }, "Nicio vizionare.")
+        : React.createElement('div', { className: "space-y-3" },
+            items.map(v =>
+              React.createElement(Card, { key: v.id, className: "p-4" },
+                React.createElement('div', { className: "flex flex-col sm:flex-row items-start justify-between gap-3" },
+                  React.createElement('div', { className: "flex items-start gap-3 min-w-0 w-full" },
+                    React.createElement('div', { className: "w-10 h-10 rounded-xl bg-purple-100 flex items-center justify-center text-purple-600 text-lg flex-shrink-0" }, "📅"),
+                    React.createElement('div', { className: "min-w-0 flex-1" },
+                      React.createElement('div', { className: "font-bold text-slate-800" }, v.clientNume),
+                      React.createElement('div', { className: "text-sm text-slate-500" }, v.telefon),
+                      React.createElement('div', { className: "mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-slate-500" },
+                        React.createElement('span', null, `📆 ${formatDate(v.data)} la ${v.ora}`),
+                        v.parcele?.length > 0 && React.createElement('span', null, `🗺 ${v.parcele.join(", ")}`),
+                        v.locatie && React.createElement('span', null, `📍 ${v.locatie}`)
+                      ),
+                      v.observatii && React.createElement('div', { className: "mt-1 text-xs text-slate-400" }, v.observatii),
+                      v.urmatPas && React.createElement('div', { className: "mt-1 text-xs text-yellow-600 font-semibold" }, `→ ${v.urmatPas}`)
+                    )
+                  ),
+                  React.createElement('div', { className: "flex items-center gap-2 flex-shrink-0 self-end sm:self-start w-full sm:w-auto justify-end" },
+                    React.createElement(Badge, { label: v.status, colorClass: v.status === "Programată" ? "bg-purple-100 text-purple-700" : v.status === "Realizată" ? "bg-emerald-100 text-emerald-700" : v.status === "Anulată" ? "bg-red-100 text-red-600" : "bg-amber-100 text-amber-700" }),
+                    React.createElement(Btn, { variant: "outline", size: "sm", onClick: () => openForm(v) }, "✏"),
+                    React.createElement(Btn, { variant: "danger", size: "sm", onClick: () => { if (window.confirm("Ștergi vizionarea?")) setVizionari(prev => prev.filter(x => x.id !== v.id)); } }, "🗑")
+                  )
+                )
+              )
+            )
+          )
+    );
+
+  return React.createElement('div', { className: "space-y-6" },
+    React.createElement('div', { className: "flex items-start justify-between flex-wrap gap-3" },
+      React.createElement('div', null,
+        React.createElement('h1', { className: "text-2xl font-bold text-slate-800" }, "Vizionări"),
+        React.createElement('p', { className: "text-slate-500 text-sm" }, `${vizionari.filter(v => v.status === "Programată").length} programate`)
+      ),
+      React.createElement(Btn, { variant: "gold", size: "sm", onClick: () => openForm() }, "+ Programează Vizionare")
+    ),
+    React.createElement(VizSection, { title: "Azi", items: programateAzi, badge: programateAzi.length }),
+    React.createElement(VizSection, { title: "Viitoare", items: urmatoare, badge: urmatoare.length }),
+    React.createElement(VizSection, { title: "Istoric", items: istoricV, badge: 0 }),
+    React.createElement(Modal, { open: showForm, onClose: () => { setShowForm(false); setEditing(null); }, title: editing ? "Editează Vizionare" : "Programează Vizionare", size: "md" },
+      React.createElement('div', { className: "space-y-4" },
+        React.createElement('div', { className: "grid grid-cols-1 sm:grid-cols-2 gap-3" },
+          React.createElement(Input, { label: "Nume client", value: f.clientNume, onChange: set("clientNume"), required: true, className: "sm:col-span-2" }),
+          React.createElement(Input, { label: "Telefon", value: f.telefon, onChange: set("telefon") }),
+          React.createElement(Select, { label: "Status", value: f.status, onChange: set("status"), options: STATUS_VIZIONARE })
+        ),
+        React.createElement('div', null,
+          React.createElement('label', { className: "block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2" }, "Parcele vizate"),
+          React.createElement('div', { className: "flex flex-wrap gap-2 max-h-32 overflow-y-auto border border-slate-200 rounded-xl p-3 bg-slate-50" },
+            PARCELE_OPTIONS.map(p =>
+              React.createElement('button', { key: p, type: "button", onClick: () => toggleParcela(p), className: `px-2.5 py-1 rounded-lg text-xs font-semibold transition-all ${f.parcele?.includes(p) ? "bg-slate-800 text-white" : "bg-white border border-slate-200 text-slate-600 hover:bg-slate-100"}` }, p)
+            )
+          )
+        ),
+        React.createElement('div', { className: "bg-slate-50 rounded-xl p-4 space-y-3" },
+          React.createElement('div', { className: "text-xs font-bold text-slate-800 uppercase tracking-wide" }, "Data și Ora Vizionării"),
+          React.createElement('div', { className: "grid grid-cols-2 gap-3" },
+            React.createElement('div', null,
+              React.createElement('label', { className: "block text-xs font-semibold text-slate-500 mb-1" }, "Data"),
+              React.createElement('input', { type: "date", value: f.data, onChange: e => set("data")(e.target.value), className: "w-full px-3 py-2 rounded-xl border border-slate-200 bg-white text-slate-800 text-sm focus:outline-none focus:ring-2 focus:ring-slate-600" })
+            ),
+            React.createElement('div', null,
+              React.createElement('label', { className: "block text-xs font-semibold text-slate-500 mb-1" }, "Ora"),
+              React.createElement('input', { type: "time", value: f.ora, onChange: e => set("ora")(e.target.value), className: "w-full px-3 py-2 rounded-xl border border-slate-200 bg-white text-slate-800 text-sm focus:outline-none focus:ring-2 focus:ring-slate-600" })
+            )
+          ),
+          f.data && React.createElement('div', { className: "text-sm text-slate-800 font-semibold text-center py-1 bg-white rounded-xl border border-slate-100" }, `📅 ${formatDate(f.data)} la ora ${f.ora}`)
+        ),
+        React.createElement(Input, { label: "Locație întâlnire", value: f.locatie, onChange: set("locatie"), placeholder: "Ex: La intrarea în ansamblu" }),
+        React.createElement(Textarea, { label: "Observații după vizionare", value: f.observatii, onChange: set("observatii"), rows: 2 }),
+        React.createElement(Input, { label: "Următorul pas", value: f.urmatPas, onChange: set("urmatPas") }),
+        React.createElement('div', { className: "flex gap-3 justify-end" },
+          React.createElement(Btn, { variant: "outline", onClick: () => { setShowForm(false); setEditing(null); } }, "Anulează"),
+          React.createElement(Btn, { variant: "gold", onClick: saveV }, "Salvează Vizionarea")
+        )
+      )
+    )
+  );
+};
+
+// ─── CONTRACTE ────────────────────────────────────────────────────────────────
+const emptyC = { clientNume: "", parcela: "", pretNegociat: "", avansStabilit: "", avansPlata: "", dataRezervare: todayStr(), dataLimitaContract: "", status: "Rezervare verbală", docNecesare: "", observatiiJuridice: "" };
+
+const Contracte = ({ contracte, setContracte }) => {
+  const [showForm, setShowForm] = useState(false);
+  const [editing, setEditing] = useState(null);
+  const [f, setFState] = useState(emptyC);
+  const set = (k) => (v) => setFState(p => ({ ...p, [k]: v }));
+  const openForm = (c = null) => { setEditing(c); setFState(c || emptyC); setShowForm(true); };
+  const saveC = () => {
+    if (!f.clientNume || !f.parcela) { alert("Completează clientul și parcela!"); return; }
+    if (editing) { setContracte(prev => prev.map(c => c.id === editing.id ? { ...editing, ...f } : c)); }
+    else { setContracte(prev => [...prev, { ...f, id: genId() }]); }
+    setShowForm(false); setEditing(null);
+  };
+
+  return React.createElement('div', { className: "space-y-4" },
+    React.createElement('div', { className: "flex items-start justify-between flex-wrap gap-3" },
+      React.createElement('div', null,
+        React.createElement('h1', { className: "text-2xl font-bold text-slate-800" }, "Contracte & Rezervări"),
+        React.createElement('p', { className: "text-slate-500 text-sm" }, `${contracte.length} înregistrate`)
+      ),
+      React.createElement(Btn, { variant: "gold", size: "sm", onClick: () => openForm() }, "+ Rezervă / Contract")
+    ),
+    React.createElement('div', { className: "space-y-3" },
+      contracte.length === 0 && React.createElement(Card, { className: "p-10 text-center text-slate-400" }, "Niciun contract înregistrat."),
+      contracte.map(c => {
+        const progres = c.pretNegociat ? Math.min(100, Math.round(((c.avansPlata || 0) / c.pretNegociat) * 100)) : 0;
+        return React.createElement(Card, { key: c.id, className: "p-4" },
+          React.createElement('div', { className: "flex flex-col sm:flex-row items-start justify-between gap-3" },
+            React.createElement('div', { className: "flex items-start gap-3 min-w-0 w-full" },
+              React.createElement('div', { className: "w-10 h-10 rounded-xl bg-slate-800 flex items-center justify-center text-white font-bold text-xs flex-shrink-0" }, c.parcela),
+              React.createElement('div', { className: "min-w-0 flex-1" },
+                React.createElement('div', { className: "font-bold text-slate-800" }, c.clientNume),
+                React.createElement('div', { className: "flex flex-wrap gap-x-4 gap-y-1 text-sm text-slate-500 mt-1" },
+                  React.createElement('span', null, `💶 ${formatCurrency(c.pretNegociat)}`),
+                  React.createElement('span', null, `💰 Avans stabilit: ${formatCurrency(c.avansStabilit)}`),
+                  React.createElement('span', null, `✅ Primit: ${formatCurrency(c.avansPlata)}`)
+                ),
+                React.createElement('div', { className: "flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-400 mt-1" },
+                  React.createElement('span', null, `📅 Rezervare: ${formatDate(c.dataRezervare)}`),
+                  c.dataLimitaContract && React.createElement('span', null, `⏰ Limită: ${formatDate(c.dataLimitaContract)}`)
+                ),
+                c.pretNegociat > 0 && React.createElement('div', { className: "mt-2 w-full max-w-48" },
+                  React.createElement('div', { className: "flex justify-between text-xs text-slate-400 mb-1" },
+                    React.createElement('span', null, "Achitat"),
+                    React.createElement('span', null, `${progres}%`)
+                  ),
+                  React.createElement('div', { className: "h-1.5 bg-slate-100 rounded-full overflow-hidden" },
+                    React.createElement('div', { className: "h-full gold-gradient rounded-full transition-all", style: { width: `${progres}%` } })
+                  )
+                ),
+                c.observatiiJuridice && React.createElement('div', { className: "mt-1.5 text-xs text-slate-400" }, `⚖ ${c.observatiiJuridice}`)
+              )
+            ),
+            React.createElement('div', { className: "flex items-center gap-2 flex-shrink-0 self-end sm:self-start w-full sm:w-auto justify-end" },
+              React.createElement(Badge, { label: c.status, colorClass: CONTRACT_COLORS[c.status] }),
+              React.createElement(Btn, { variant: "outline", size: "sm", onClick: () => openForm(c) }, "✏"),
+              React.createElement(Btn, { variant: "danger", size: "sm", onClick: () => { if (window.confirm("Ștergi?")) setContracte(prev => prev.filter(x => x.id !== c.id)); } }, "🗑")
+            )
+          )
+        );
+      })
+    ),
+    React.createElement(Modal, { open: showForm, onClose: () => { setShowForm(false); setEditing(null); }, title: editing ? "Editează Contract/Rezervare" : "Contract / Rezervare Nouă", size: "md" },
+      React.createElement('div', { className: "space-y-4" },
+        React.createElement('div', { className: "grid grid-cols-1 sm:grid-cols-2 gap-3" },
+          React.createElement(Input, { label: "Nume client", value: f.clientNume, onChange: set("clientNume"), required: true, className: "sm:col-span-2" }),
+          React.createElement(Select, { label: "Parcelă", value: f.parcela, onChange: set("parcela"), options: PARCELE_OPTIONS }),
+          React.createElement(Select, { label: "Status", value: f.status, onChange: set("status"), options: STATUS_CONTRACT }),
+          React.createElement(Input, { label: "Preț negociat (€)", type: "number", value: f.pretNegociat, onChange: set("pretNegociat") }),
+          React.createElement(Input, { label: "Avans stabilit (€)", type: "number", value: f.avansStabilit, onChange: set("avansStabilit") }),
+          React.createElement(Input, { label: "Avans plătit (€)", type: "number", value: f.avansPlata, onChange: set("avansPlata") }),
+          React.createElement(Input, { label: "Data rezervare", type: "date", value: f.dataRezervare, onChange: set("dataRezervare") }),
+          React.createElement(Input, { label: "Dată limită semnare", type: "date", value: f.dataLimitaContract, onChange: set("dataLimitaContract") })
+        ),
+        React.createElement(Textarea, { label: "Documente necesare", value: f.docNecesare, onChange: set("docNecesare"), rows: 2 }),
+        React.createElement(Textarea, { label: "Observații juridice / notariale", value: f.observatiiJuridice, onChange: set("observatiiJuridice"), rows: 2 }),
+        React.createElement('div', { className: "flex gap-3 justify-end" },
+          React.createElement(Btn, { variant: "outline", onClick: () => { setShowForm(false); setEditing(null); } }, "Anulează"),
+          React.createElement(Btn, { variant: "gold", onClick: saveC }, "Salvează")
+        )
+      )
+    )
+  );
+};
+
+// ─── REMINDERE ────────────────────────────────────────────────────────────────
+const emptyR = { clientId: "", clientNume: "", data: todayStr(), ora: "09:00", tip: "Apel", descriere: "", prioritate: "Medie", facut: false };
+
+const Remindere = ({ remindere, setRemindere, leads }) => {
+  const [showForm, setShowForm] = useState(false);
+  const [editing, setEditing] = useState(null);
+  const [f, setFState] = useState(emptyR);
+  const set = (k) => (v) => setFState(p => ({ ...p, [k]: v }));
+  const openForm = (r = null) => { setEditing(r); setFState(r || emptyR); setShowForm(true); };
+  const saveR = () => {
+    if (!f.clientNume || !f.data) { alert("Completează clientul și data!"); return; }
+    if (editing) { setRemindere(prev => prev.map(r => r.id === editing.id ? { ...editing, ...f } : r)); }
+    else { setRemindere(prev => [...prev, { ...f, id: genId() }]); }
+    setShowForm(false); setEditing(null);
+  };
+  const toggleFacut = (id) => setRemindere(prev => prev.map(r => r.id === id ? { ...r, facut: !r.facut } : r));
+  const azi = todayStr();
+  const maine = tomorrowStr();
+  const intarziate = remindere.filter(r => !r.facut && r.data < azi).sort((a, b) => a.data.localeCompare(b.data));
+  const deAzi = remindere.filter(r => !r.facut && r.data === azi).sort((a, b) => (a.ora || "").localeCompare(b.ora || ""));
+  const deMaine = remindere.filter(r => !r.facut && r.data === maine);
+  const viitoare = remindere.filter(r => !r.facut && r.data > maine).sort((a, b) => a.data.localeCompare(b.data));
+  const facute = remindere.filter(r => r.facut).sort((a, b) => b.data.localeCompare(a.data)).slice(0, 10);
+
+  const ReminderCard = ({ r }) =>
+    React.createElement('div', { className: `flex items-start gap-3 p-3.5 rounded-xl border transition-all ${r.facut ? "bg-slate-50 border-slate-100 opacity-60" : "bg-white border-slate-200 hover:border-slate-300 hover:shadow-sm"}` },
+      React.createElement('button', { onClick: () => toggleFacut(r.id), className: `w-5 h-5 rounded-full border-2 flex-shrink-0 mt-0.5 transition-all flex items-center justify-center ${r.facut ? "bg-emerald-400 border-emerald-400" : "border-slate-300 hover:border-yellow-500"}` },
+        r.facut && React.createElement('span', { className: "text-white text-xs" }, "✓")
+      ),
+      React.createElement('div', { className: "flex-1 min-w-0" },
+        React.createElement('div', { className: "flex items-center gap-2 flex-wrap" },
+          React.createElement('span', { className: `font-semibold text-sm ${r.facut ? "line-through text-slate-400" : "text-slate-800"}` }, r.clientNume),
+          React.createElement('span', { className: "text-xs text-slate-400" }, `• ${r.tip}`),
+          React.createElement(Badge, { label: r.prioritate, colorClass: PRIORITATE_COLORS[r.prioritate] })
+        ),
+        React.createElement('div', { className: "text-xs text-slate-500 mt-0.5" }, `📅 ${formatDate(r.data)} la ${r.ora}`),
+        r.descriere && React.createElement('div', { className: "text-xs text-slate-500 mt-1 bg-slate-50 rounded-lg px-2 py-1" }, r.descriere)
+      ),
+      React.createElement('div', { className: "flex gap-1.5 flex-shrink-0" },
+        React.createElement(Btn, { variant: "ghost", size: "sm", onClick: () => openForm(r) }, "✏"),
+        React.createElement(Btn, { variant: "danger", size: "sm", onClick: () => { if (window.confirm("Ștergi?")) setRemindere(prev => prev.filter(x => x.id !== r.id)); } }, "🗑")
+      )
+    );
+
+  const Section = ({ title, items, accent = false }) => {
+    if (items.length === 0) return null;
+    return React.createElement('div', null,
+      React.createElement('div', { className: "flex items-center gap-2 mb-3" },
+        React.createElement('h2', { className: `font-bold text-sm uppercase tracking-wide ${accent ? "text-red-600" : "text-slate-800"}` }, title),
+        React.createElement('span', { className: `text-xs font-bold px-2 py-0.5 rounded-full ${accent ? "bg-red-100 text-red-600" : "bg-slate-800 text-white"}` }, items.length)
+      ),
+      React.createElement('div', { className: "space-y-2" }, items.map(r => React.createElement(ReminderCard, { key: r.id, r })))
+    );
+  };
+
+  return React.createElement('div', { className: "space-y-5" },
+    React.createElement('div', { className: "flex items-start justify-between flex-wrap gap-3" },
+      React.createElement('div', null,
+        React.createElement('h1', { className: "text-2xl font-bold text-slate-800" }, "Remindere"),
+        React.createElement('p', { className: "text-slate-500 text-sm" }, `${deAzi.length} pentru azi • ${intarziate.length} întârziate`)
+      ),
+      React.createElement(Btn, { variant: "gold", size: "sm", onClick: () => openForm() }, "+ Adaugă Reminder")
+    ),
+    intarziate.length > 0 && React.createElement('div', { className: "bg-red-50 border border-red-200 rounded-2xl p-4" },
+      React.createElement(Section, { title: "⚠️ Întârziate", items: intarziate, accent: true })
+    ),
+    React.createElement(Section, { title: "Azi", items: deAzi }),
+    React.createElement(Section, { title: "Mâine", items: deMaine }),
+    React.createElement(Section, { title: "Viitoare", items: viitoare }),
+    facute.length > 0 && React.createElement('div', null,
+      React.createElement('h2', { className: "font-bold text-sm uppercase tracking-wide text-slate-400 mb-3" }, "Finalizate recent"),
+      React.createElement('div', { className: "space-y-2" }, facute.map(r => React.createElement(ReminderCard, { key: r.id, r })))
+    ),
+    remindere.length === 0 && React.createElement(Card, { className: "p-10 text-center text-slate-400" }, "Niciun reminder adăugat încă."),
+    React.createElement(Modal, { open: showForm, onClose: () => { setShowForm(false); setEditing(null); }, title: editing ? "Editează Reminder" : "Reminder Nou", size: "sm" },
+      React.createElement('div', { className: "space-y-4" },
+        React.createElement('div', null,
+          React.createElement('label', { className: "block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1" }, "Client"),
+          React.createElement('input', {
+            list: "leads-list",
+            value: f.clientNume,
+            onChange: e => set("clientNume")(e.target.value),
+            placeholder: "Caută sau scrie numele clientului...",
+            className: "w-full px-3 py-2 rounded-xl border border-slate-200 bg-white text-slate-800 text-sm focus:outline-none focus:ring-2 focus:ring-slate-600"
+          }),
+          React.createElement('datalist', { id: "leads-list" }, leads.map(l => React.createElement('option', { key: l.id, value: l.nume })))
+        ),
+        React.createElement(Select, { label: "Tip", value: f.tip, onChange: set("tip"), options: TIP_REMINDER }),
+        React.createElement('div', { className: "bg-slate-50 rounded-xl p-4 space-y-3" },
+          React.createElement('div', { className: "text-xs font-bold text-slate-800 uppercase tracking-wide" }, "Când?"),
+          React.createElement('div', { className: "grid grid-cols-2 gap-3" },
+            React.createElement('div', null,
+              React.createElement('label', { className: "block text-xs font-semibold text-slate-500 mb-1" }, "Data"),
+              React.createElement('input', { type: "date", value: f.data, onChange: e => set("data")(e.target.value), className: "w-full px-3 py-2 rounded-xl border border-slate-200 bg-white text-slate-800 text-sm focus:outline-none focus:ring-2 focus:ring-slate-600" })
+            ),
+            React.createElement('div', null,
+              React.createElement('label', { className: "block text-xs font-semibold text-slate-500 mb-1" }, "Ora"),
+              React.createElement('input', { type: "time", value: f.ora, onChange: e => set("ora")(e.target.value), className: "w-full px-3 py-2 rounded-xl border border-slate-200 bg-white text-slate-800 text-sm focus:outline-none focus:ring-2 focus:ring-slate-600" })
+            )
+          ),
+          f.data && React.createElement('div', { className: "text-sm text-slate-800 font-semibold text-center py-2 bg-white rounded-xl border border-slate-100" }, `📅 ${formatDate(f.data)} la ora ${f.ora}`)
+        ),
+        React.createElement(Select, { label: "Prioritate", value: f.prioritate, onChange: set("prioritate"), options: PRIORITATI }),
+        React.createElement(Textarea, { label: "Descriere / Notițe follow-up", value: f.descriere, onChange: set("descriere"), rows: 3 }),
+        React.createElement('div', { className: "flex gap-3 justify-end" },
+          React.createElement(Btn, { variant: "outline", onClick: () => { setShowForm(false); setEditing(null); } }, "Anulează"),
+          React.createElement(Btn, { variant: "gold", onClick: saveR }, "Salvează Reminder")
+        )
+      )
+    )
+  );
+};
+
+// ─── APP ──────────────────────────────────────────────────────────────────────
+function App() {
+  const [active, setActive] = useState("dashboard");
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [syncMsg, setSyncMsg] = useState("");
+
+  const [leads, setLeadsState] = useState([]);
+  const [parcele, setParcelState] = useState([]);
+  const [vizionari, setVizionariState] = useState([]);
+  const [contracte, setContracteState] = useState([]);
+  const [remindere, setRemindereState] = useState([]);
+
+  // ── Load all data from Supabase on mount ──
+  useEffect(() => {
+    (async () => {
+      setLoading(true);
+      const [l, p, v, c, r] = await Promise.all([
+        db.getAll("leads"),
+        db.getAll("parcele"),
+        db.getAll("vizionari"),
+        db.getAll("contracte"),
+        db.getAll("remindere"),
+      ]);
+      if (l) setLeadsState(l.map(fromDb));
+      if (p) setParcelState(p.map(fromDb));
+      if (v) setVizionariState(v.map(fromDb));
+      if (c) setContracteState(c.map(fromDb));
+      if (r) setRemindereState(r.map(fromDb));
+      setLoading(false);
+    })();
+  }, []);
+
+  const showSync = (msg) => { setSyncMsg(msg); setTimeout(() => setSyncMsg(""), 3000); };
+
+  // ── Sync wrappers — save to Supabase on every change ──
+  const setLeads = useCallback((updater) => {
+    setLeadsState(prev => {
+      const next = typeof updater === "function" ? updater(prev) : updater;
+      prev.forEach(x => { if (!next.find(n => n.id === x.id)) db.remove("leads", x.id); });
+      next.forEach(x => {
+        const old = prev.find(p => p.id === x.id);
+        if (!old || JSON.stringify(old) !== JSON.stringify(x))
+          db.upsert("leads", toDb(x)).then(r => {
+            if (r && !r.error) showSync("✅ Salvat în cloud");
+            else showSync("❌ Eroare salvare! Vezi consola.");
+          });
+      });
+      return next;
+    });
+  }, []);
+
+  const setParcele = useCallback((updater) => {
+    setParcelState(prev => {
+      const next = typeof updater === "function" ? updater(prev) : updater;
+      prev.forEach(x => { if (!next.find(n => n.id === x.id)) db.remove("parcele", x.id); });
+      next.forEach(x => {
+        const old = prev.find(p => p.id === x.id);
+        if (!old || JSON.stringify(old) !== JSON.stringify(x))
+          db.upsert("parcele", toDb(x)).then(r => { if (r) showSync("✅ Salvat în cloud"); });
+      });
+      return next;
+    });
+  }, []);
+
+  const setVizionari = useCallback((updater) => {
+    setVizionariState(prev => {
+      const next = typeof updater === "function" ? updater(prev) : updater;
+      prev.forEach(x => { if (!next.find(n => n.id === x.id)) db.remove("vizionari", x.id); });
+      next.forEach(x => {
+        const old = prev.find(p => p.id === x.id);
+        if (!old || JSON.stringify(old) !== JSON.stringify(x))
+          db.upsert("vizionari", toDb(x)).then(r => { if (r) showSync("✅ Salvat în cloud"); });
+      });
+      return next;
+    });
+  }, []);
+
+  const setContracte = useCallback((updater) => {
+    setContracteState(prev => {
+      const next = typeof updater === "function" ? updater(prev) : updater;
+      prev.forEach(x => { if (!next.find(n => n.id === x.id)) db.remove("contracte", x.id); });
+      next.forEach(x => {
+        const old = prev.find(p => p.id === x.id);
+        if (!old || JSON.stringify(old) !== JSON.stringify(x))
+          db.upsert("contracte", toDb(x)).then(r => { if (r) showSync("✅ Salvat în cloud"); });
+      });
+      return next;
+    });
+  }, []);
+
+  const setRemindere = useCallback((updater) => {
+    setRemindereState(prev => {
+      const next = typeof updater === "function" ? updater(prev) : updater;
+      prev.forEach(x => { if (!next.find(n => n.id === x.id)) db.remove("remindere", x.id); });
+      next.forEach(x => {
+        const old = prev.find(p => p.id === x.id);
+        if (!old || JSON.stringify(old) !== JSON.stringify(x))
+          db.upsert("remindere", toDb(x)).then(r => { if (r) showSync("✅ Salvat în cloud"); });
+      });
+      return next;
+    });
+  }, []);
+
+  const refreshData = async () => {
+    setLoading(true);
+    const [l, p, v, c, r] = await Promise.all([
+      db.getAll("leads"), db.getAll("parcele"), db.getAll("vizionari"),
+      db.getAll("contracte"), db.getAll("remindere"),
+    ]);
+    if (l) setLeadsState(l.map(fromDb));
+    if (p) setParcelState(p.map(fromDb));
+    if (v) setVizionariState(v.map(fromDb));
+    if (c) setContracteState(c.map(fromDb));
+    if (r) setRemindereState(r.map(fromDb));
+    setLoading(false);
+    showSync("🔄 Date actualizate!");
+  };
+
+  // ── Loading screen ──
+  if (loading) {
+    return React.createElement('div', { className: "min-h-screen bg-slate-900 flex items-center justify-center" },
+      React.createElement('div', { className: "text-center text-white" },
+        React.createElement('div', { className: "text-5xl mb-4" }, "🏡"),
+        React.createElement('div', { className: "text-lg font-semibold" }, "Se încarcă datele..."),
+        React.createElement('div', { className: "text-slate-400 text-sm mt-2" }, "Conectare la Supabase")
+      )
+    );
+  }
+
+  const azi = todayStr();
+  const urgentCount = leads.filter(l => l.dataUrmatorApel === azi).length + remindere.filter(r => !r.facut && r.data === azi).length;
+
+  const pages = {
+    dashboard: React.createElement(Dashboard, { leads, parcele, vizionari, remindere, setActive }),
+    leads: React.createElement(Leads, { leads, setLeads }),
+    parcele: React.createElement(Parcele, { parcele, setParcele, leads }),
+    vizionari: React.createElement(Vizionari, { vizionari, setVizionari, leads }),
+    contracte: React.createElement(Contracte, { contracte, setContracte }),
+    remindere: React.createElement(Remindere, { remindere, setRemindere, leads }),
+  };
+
+  return React.createElement('div', { className: "min-h-screen bg-slate-50 font-sans" },
+    React.createElement(Sidebar, { active, setActive, sidebarOpen, setSidebarOpen }),
+    // Mobile top bar
+    React.createElement('div', { className: "lg:hidden fixed top-0 left-0 right-0 z-10 bg-white border-b border-slate-100 flex items-center justify-between", style: { paddingTop: "calc(env(safe-area-inset-top, 0px) + 12px)", paddingBottom: "12px", paddingLeft: "calc(env(safe-area-inset-left, 0px) + 16px)", paddingRight: "calc(env(safe-area-inset-right, 0px) + 16px)" } },
+      React.createElement('button', { onClick: () => setSidebarOpen(true), className: "w-9 h-9 flex items-center justify-center rounded-xl hover:bg-slate-100 text-slate-600 text-xl" }, "☰"),
+      React.createElement('span', { className: "text-sm font-bold text-slate-800" }, "🏡 Imobiliare CRM"),
+      urgentCount > 0
+        ? React.createElement('div', { className: "w-6 h-6 rounded-full bg-red-500 flex items-center justify-center text-white text-xs font-bold" }, urgentCount)
+        : React.createElement('div', { className: "w-6" })
+    ),
+    // Sync notification toast
+    syncMsg && React.createElement('div', {
+      style: {
+        position: "fixed",
+        bottom: "calc(env(safe-area-inset-bottom, 0px) + 20px)",
+        left: "50%",
+        transform: "translateX(-50%)",
+        zIndex: 9998,
+        maxWidth: "calc(100vw - 32px)"
+      },
+      className: "bg-slate-800 text-white text-sm font-semibold px-4 py-2.5 rounded-xl shadow-lg text-center"
+    }, syncMsg),
+    // Refresh button — top right on desktop
+    React.createElement('div', { className: "hidden lg:block fixed top-4 right-6 z-10" },
+      React.createElement('button', {
+        onClick: refreshData,
+        className: "flex items-center gap-2 px-3 py-1.5 bg-white border border-slate-200 rounded-xl text-xs font-semibold text-slate-600 hover:bg-slate-50 shadow-sm"
+      }, "🔄 Reîncarcă date")
+    ),
+    React.createElement('main', { className: "lg:ml-64 px-3 sm:px-4 py-6 pt-20 lg:pt-8 max-w-5xl mx-auto", style: { paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 24px)" } },
+      pages[active]
+    )
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(App));
+</script>
+</body>
+</html>
